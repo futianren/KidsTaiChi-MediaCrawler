@@ -45,7 +45,7 @@ from .client import XiaoHongShuClient
 from .exception import DataFetchError, NoteNotFoundError
 from .field import SearchSortType
 from .help import parse_note_info_from_note_url, parse_creator_info_from_url, get_search_id
-from .login import XiaoHongShuLogin
+from .login import XiaoHongShuLogin, try_load_saved_xhs_cookies
 
 
 class XiaoHongShuCrawler(AbstractCrawler):
@@ -93,6 +93,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
                 await self.browser_context.add_init_script(path="libs/stealth.min.js")
 
             self.context_page = await self.browser_context.new_page()
+            await try_load_saved_xhs_cookies(self.browser_context)
             await self.context_page.goto(self.index_url)
 
             # Create a client to interact with the Xiaohongshu website.

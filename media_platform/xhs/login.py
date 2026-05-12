@@ -20,6 +20,8 @@
 
 import asyncio
 import functools
+import json
+import os
 import sys
 from typing import Optional
 
@@ -31,6 +33,41 @@ import config
 from base.base_crawler import AbstractLogin
 from cache.cache_factory import CacheFactory
 from tools import utils
+
+
+async def try_load_saved_xhs_cookies(browser_context: BrowserContext) -> bool:
+    """
+    若存在 data/xhs_browser_cookies.json（由 tools/export_xhs_cookies.py 生成），
+    在首次访问首页前注入，便于无头复用已登录态。
+    """
+    path = os.path.normpath(os.path.join(os.getcwd(), "data", "xhs_browser_cookies.json"))
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path, encoding="utf-8") as f:
+            cookies = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        utils.logger.warning(f"[try_load_saved_xhs_cookies] skip read: {e}")
+        return False
+    if not isinstance(cookies, list) or not cookies:
+        return False
+    try:
+        await browser_context.add_cookies(cookies)
+        utils.logger.info(f"[try_load_saved_xhs_cookies] Injected {len(cookies)} cookies from {path}")
+        return True
+    except Exception as e:
+        utils.logger.warning(f"[try_load_saved_xhs_cookies] batch add failed: {e}, retry per cookie")
+        ok = 0
+        for c in cookies:
+            if not isinstance(c, dict):
+                continue
+            try:
+                await browser_context.add_cookies([c])
+                ok += 1
+            except Exception:
+                continue
+        utils.logger.info(f"[try_load_saved_xhs_cookies] Injected {ok}/{len(cookies)} cookies")
+        return ok > 0
 
 
 class XiaoHongShuLogin(AbstractLogin):
@@ -213,12 +250,11 @@ class XiaoHongShuLogin(AbstractLogin):
     async def login_by_cookies(self):
         """login xiaohongshu website by cookies"""
         utils.logger.info("[XiaoHongShuLogin.login_by_cookies] Begin login xiaohongshu by cookie ...")
+        domain = ".rednote.com" if config.XHS_INTERNATIONAL else ".xiaohongshu.com"
         for key, value in utils.convert_str_cookie_to_dict(self.cookie_str).items():
-            if key != "web_session":  # Only set web_session cookie attribute
-                continue
-            await self.browser_context.add_cookies([{
-                'name': key,
-                'value': value,
-                'domain': ".rednote.com" if config.XHS_INTERNATIONAL else ".xiaohongshu.com",
-                'path': "/"
-            }])
+            try:
+                await self.browser_context.add_cookies(
+                    [{"name": key, "value": value, "domain": domain, "path": "/"}]
+                )
+            except Exception as e:
+                utils.logger.warning(f"[XiaoHongShuLogin.login_by_cookies] skip cookie {key!r}: {e}")

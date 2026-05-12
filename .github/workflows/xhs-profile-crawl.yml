@@ -1,0 +1,71 @@
+name: XHS Profile Crawl
+
+on:
+  workflow_dispatch:
+    inputs:
+      creator_url:
+        description: "小红书主页 URL（建议带 xsec_token）"
+        required: true
+        default: "https://www.xiaohongshu.com/user/profile/599a866c6a6a691b72914f22/?xsec_token=ABUoa8EkF6TS7kYqrHt2-J5908KLYwpJfDjAaN-lQHjIs=&xsec_source=pc_user"
+
+permissions:
+  contents: read
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Install Playwright Chromium
+        run: uv run playwright install --with-deps chromium
+
+      - name: Disable CDP mode in CI runtime
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("config/base_config.py")
+          s = p.read_text(encoding="utf-8")
+          s = re.sub(r"(?m)^ENABLE_CDP_MODE\s*=\s*True\s*$", "ENABLE_CDP_MODE = False", s)
+          s = re.sub(r"(?m)^CDP_CONNECT_EXISTING\s*=\s*True\s*$", "CDP_CONNECT_EXISTING = False", s)
+          p.write_text(s, encoding="utf-8")
+          print("Patched config/base_config.py for GitHub Actions runtime.")
+          PY
+
+      - name: Run XHS creator crawl (cookie login)
+        env:
+          PYTHONUTF8: "1"
+        run: >
+          uv run python main.py
+          --platform xhs
+          --lt cookie
+          --type creator
+          --creator_id "${{ github.event.inputs.creator_url }}"
+          --headless true
+          --get_comment false
+          --save_data_option jsonl
+
+      - name: Upload crawl artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xhs-crawl-output
+          path: |
+            data/**/*.json
+            data/**/*.jsonl
+            data/**/*.txt
+          if-no-files-found: warn

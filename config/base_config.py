@@ -56,6 +56,9 @@ ENABLE_CDP_MODE = True
 # 如果端口被占用，系统会自动尝试下一个可用端口
 CDP_DEBUG_PORT = 9222
 
+# 无头/自动化抓取时，若本机未开启带远程调试端口的浏览器，请设为 False，否则会长时间等待连接 9222
+CDP_CONNECT_EXISTING = False
+
 # 自定义浏览器路径（可选）
 # 如果为空，系统会自动检测 Chrome/Edge 的安装路径
 # Windows 示例: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
@@ -68,13 +71,6 @@ CDP_HEADLESS = False
 
 # 浏览器启动超时时间（秒）
 BROWSER_LAUNCH_TIMEOUT = 60
-
-# 是否连接用户已打开的浏览器，而不是启动新的浏览器
-# 开启后，程序会连接一个已经启用了远程调试的浏览器
-# 用户需要在 Chrome 中开启远程调试：chrome://inspect/#remote-debugging
-# 或者使用命令行参数启动 Chrome：--remote-debugging-port=9222
-# 这种方式反检测效果最好，因为直接使用用户真实浏览器的所有 Cookie、扩展和浏览历史
-CDP_CONNECT_EXISTING = True
 
 # 程序结束时是否自动关闭浏览器
 # 设置为 False 可以保持浏览器运行，方便调试
@@ -92,8 +88,8 @@ USER_DATA_DIR = "%s_user_data_dir"  # %s will be replaced by platform name
 # The number of pages to start crawling starts from the first page by default
 START_PAGE = 1
 
-# Control the number of crawled videos/posts
-CRAWLER_MAX_NOTES_COUNT = 15
+# Control the number of crawled videos/posts（创作者主页「全部笔记」时请调大）
+CRAWLER_MAX_NOTES_COUNT = 500
 
 # Controlling the number of concurrent crawlers
 MAX_CONCURRENCY_NUM = 1
@@ -141,3 +137,18 @@ from .ks_config import *
 from .weibo_config import *
 from .tieba_config import *
 from .zhihu_config import *
+
+# 若存在 data/xhs_cookie_string.txt（可由 python tools/export_xhs_cookies.py 生成），自动填入 COOKIES，便于 --lt cookie 复用
+try:
+    import os as _os_xhs
+
+    _xhs_cookie_fp = _os_xhs.path.normpath(
+        _os_xhs.path.join(_os_xhs.path.dirname(_os_xhs.path.abspath(__file__)), "..", "data", "xhs_cookie_string.txt")
+    )
+    if _os_xhs.path.isfile(_xhs_cookie_fp):
+        with open(_xhs_cookie_fp, encoding="utf-8") as _xhs_cf:
+            _xhs_cookie_val = _xhs_cf.read().strip()
+        if _xhs_cookie_val and not _xhs_cookie_val.startswith("#"):
+            COOKIES = _xhs_cookie_val
+except OSError:
+    pass
