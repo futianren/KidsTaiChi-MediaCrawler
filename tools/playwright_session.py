@@ -26,39 +26,44 @@ def session_path_for_platform(platform: str) -> Path:
 
 
 async def attach_chromium_browser(
-    playwright: Playwright,
-    cdp_url: str,
+    browser_type: BrowserType,
+    headless: bool = False,
+    playwright_proxy: Optional[dict] = None,
     user_agent: Optional[str] = None,
-    proxy: Optional[dict] = None,
-    state_path: Optional[Path] = None,
+    viewport: Optional[dict] = None,
+    storage_state_path: Optional[Path] = None,
 ) -> Tuple[Browser, BrowserContext]:
     """
-    Attach to an existing Chromium browser via CDP
+    Launch a Chromium browser with Playwright
 
     Args:
-        playwright: Playwright instance
-        cdp_url: CDP endpoint URL
+        browser_type: Playwright browser type (chromium)
+        headless: Whether to run in headless mode
+        playwright_proxy: Proxy configuration
         user_agent: User agent string
-        proxy: Proxy configuration
-        state_path: Path to storage state file
+        viewport: Viewport size dict with width and height
+        storage_state_path: Path to storage state file
 
     Returns:
         Tuple of (Browser, BrowserContext)
     """
-    browser = await playwright.chromium.connect_over_cdp(cdp_url)
+    launch_options = {
+        "headless": headless,
+    }
+    if playwright_proxy:
+        launch_options["proxy"] = playwright_proxy
+
+    browser = await browser_type.launch(**launch_options)
 
     context_options = {}
     if user_agent:
         context_options["user_agent"] = user_agent
-    if proxy:
-        context_options["proxy"] = proxy
-    if state_path and state_path.exists():
-        context_options["storage_state"] = str(state_path)
+    if viewport:
+        context_options["viewport"] = viewport
+    if storage_state_path and storage_state_path.exists():
+        context_options["storage_state"] = str(storage_state_path)
 
-    if browser.contexts:
-        context = browser.contexts[0]
-    else:
-        context = await browser.new_context(**context_options)
+    context = await browser.new_context(**context_options)
 
     return browser, context
 
