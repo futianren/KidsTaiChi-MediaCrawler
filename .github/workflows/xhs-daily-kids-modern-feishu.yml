@@ -57,23 +57,26 @@ jobs:
           PY
 
       - name: Verify secrets
+        env:
+          XHS_PLAYWRIGHT_STORAGE_STATE: ${{ secrets.XHS_PLAYWRIGHT_STORAGE_STATE }}
         run: |
           set -euo pipefail
-          for n in FEISHU_APP_ID FEISHU_APP_SECRET FEISHU_WEBHOOK; do
+          for n in FEISHU_APP_ID FEISHU_APP_SECRET FEISHU_WEBHOOK XHS_PLAYWRIGHT_STORAGE_STATE; do
             if [[ -z "${!n:-}" ]]; then
               echo "::error::Missing repository secret: $n"
               exit 1
             fi
           done
 
-      - name: Verify session.json exists
+      - name: Restore XHS Playwright storage state
+        env:
+          XHS_PLAYWRIGHT_STORAGE_STATE: ${{ secrets.XHS_PLAYWRIGHT_STORAGE_STATE }}
         run: |
           set -euo pipefail
-          if [[ ! -f cookiesFile/xhs/session.json ]]; then
-            echo "::error::Missing cookiesFile/xhs/session.json"
-            exit 1
-          fi
-          echo "✅ session.json found"
+          mkdir -p cookiesFile/xhs
+          echo "$XHS_PLAYWRIGHT_STORAGE_STATE" | base64 -d | gunzip > cookiesFile/xhs/session.json
+          test -s cookiesFile/xhs/session.json
+          echo "✅ session.json restored from secret (decompressed)"
 
       - name: Run XHS creator (kids_taichi + modern_taichi)
         id: crawl

@@ -165,9 +165,6 @@ cython_debug/
 /temp_image/
 /browser_data/
 /cookiesFile/
-# 但允许提交 session.json（用于 CI）
-!/cookiesFile/xhs/
-!/cookiesFile/xhs/session.json
 
 */.DS_Store
 .vscode
