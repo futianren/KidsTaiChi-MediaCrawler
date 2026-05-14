@@ -24,6 +24,7 @@ from asyncio import Task
 from typing import Dict, List, Optional, Tuple
 
 from playwright.async_api import (
+    Browser,
     BrowserContext,
     BrowserType,
     Page,
@@ -38,6 +39,11 @@ from proxy.proxy_ip_pool import IpInfoModel, ProxyIpPool, create_ip_pool
 from store import tieba as tieba_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
+from tools.playwright_session import (
+    attach_chromium_browser,
+    finalize_standard_playwright,
+    session_path_for_platform,
+)
 from var import crawler_type_var, source_keyword_var
 
 from .client import BaiduTieBaClient
@@ -51,6 +57,8 @@ class TieBaCrawler(AbstractCrawler):
     tieba_client: BaiduTieBaClient
     browser_context: BrowserContext
     cdp_manager: Optional[CDPBrowserManager]
+    playwright_browser: Optional[Browser]
+    _session_persist_ok: bool
 
     def __init__(self) -> None:
         self.index_url = "https://tieba.baidu.com"
@@ -58,6 +66,8 @@ class TieBaCrawler(AbstractCrawler):
         self.user_agent = utils.get_user_agent()
         self._page_extractor = TieBaExtractor()
         self.cdp_manager = None
+        self.playwright_browser = None
+        self._session_persist_ok = False
 
     async def start(self) -> None:
         """
@@ -80,70 +90,78 @@ class TieBaCrawler(AbstractCrawler):
             )
 
         async with async_playwright() as playwright:
-            # Choose startup mode based on configuration
-            if config.ENABLE_CDP_MODE:
-                utils.logger.info("[BaiduTieBaCrawler] Launching browser in CDP mode")
-                self.browser_context = await self.launch_browser_with_cdp(
-                    playwright,
-                    playwright_proxy_format,
-                    self.user_agent,
-                    headless=config.CDP_HEADLESS,
-                )
-            else:
-                utils.logger.info("[BaiduTieBaCrawler] Launching browser in standard mode")
-                # Launch a browser context.
-                chromium = playwright.chromium
-                self.browser_context = await self.launch_browser(
-                    chromium,
-                    playwright_proxy_format,
-                    self.user_agent,
-                    headless=config.HEADLESS,
-                )
+            self._session_persist_ok = False
+            self.playwright_browser = None
+            try:
+                if config.ENABLE_CDP_MODE:
+                    utils.logger.info("[BaiduTieBaCrawler] Launching browser in CDP mode")
+                    self.browser_context = await self.launch_browser_with_cdp(
+                        playwright,
+                        playwright_proxy_format,
+                        self.user_agent,
+                        headless=config.CDP_HEADLESS,
+                    )
+                else:
+                    utils.logger.info("[BaiduTieBaCrawler] Launching browser in standard mode")
+                    chromium = playwright.chromium
+                    self.browser_context = await self.launch_browser(
+                        chromium,
+                        playwright_proxy_format,
+                        self.user_agent,
+                        headless=config.HEADLESS,
+                    )
 
-            # Inject anti-detection scripts - for Baidu's special detection
-            await self._inject_anti_detection_scripts()
+                await self._inject_anti_detection_scripts()
 
-            self.context_page = await self.browser_context.new_page()
+                self.context_page = await self.browser_context.new_page()
+                await self._navigate_to_tieba_via_baidu()
 
-            # First visit Baidu homepage, then click Tieba link to avoid triggering security verification
-            await self._navigate_to_tieba_via_baidu()
-
-            # Create a client to interact with the baidutieba website.
-            self.tieba_client = await self.create_tieba_client(
-                httpx_proxy_format,
-                ip_proxy_pool if config.ENABLE_IP_PROXY else None
-            )
-
-            # Check login status and perform login if necessary
-            if not await self.tieba_client.pong(browser_context=self.browser_context):
-                login_obj = BaiduTieBaLogin(
-                    login_type=config.LOGIN_TYPE,
-                    login_phone="",  # your phone number
-                    browser_context=self.browser_context,
-                    context_page=self.context_page,
-                    cookie_str=config.COOKIES,
-                )
-                await login_obj.begin()
-                await self.tieba_client.update_cookies(
-                    browser_context=self.browser_context,
-                    urls=self.cookie_urls,
+                self.tieba_client = await self.create_tieba_client(
+                    httpx_proxy_format,
+                    ip_proxy_pool if config.ENABLE_IP_PROXY else None,
                 )
 
-            crawler_type_var.set(config.CRAWLER_TYPE)
-            if config.CRAWLER_TYPE == "search":
-                # Search for notes and retrieve their comment information.
-                await self.search()
-                await self.get_specified_tieba_notes()
-            elif config.CRAWLER_TYPE == "detail":
-                # Get the information and comments of the specified post
-                await self.get_specified_notes()
-            elif config.CRAWLER_TYPE == "creator":
-                # Get creator's information and their notes and comments
-                await self.get_creators_and_notes()
-            else:
-                pass
+                if not await self.tieba_client.pong(browser_context=self.browser_context):
+                    login_obj = BaiduTieBaLogin(
+                        login_type=config.LOGIN_TYPE,
+                        login_phone="",
+                        browser_context=self.browser_context,
+                        context_page=self.context_page,
+                        cookie_str=config.COOKIES,
+                    )
+                    await login_obj.begin()
+                    await self.tieba_client.update_cookies(
+                        browser_context=self.browser_context,
+                        urls=self.cookie_urls,
+                    )
+                if await self.tieba_client.pong(browser_context=self.browser_context):
+                    self._session_persist_ok = True
 
-            utils.logger.info("[BaiduTieBaCrawler.start] Tieba Crawler finished ...")
+                crawler_type_var.set(config.CRAWLER_TYPE)
+                if config.CRAWLER_TYPE == "search":
+                    await self.search()
+                    await self.get_specified_tieba_notes()
+                elif config.CRAWLER_TYPE == "detail":
+                    await self.get_specified_notes()
+                elif config.CRAWLER_TYPE == "creator":
+                    await self.get_creators_and_notes()
+                else:
+                    pass
+
+                utils.logger.info("[BaiduTieBaCrawler.start] Tieba Crawler finished ...")
+            finally:
+                await finalize_standard_playwright(
+                    use_cdp=config.ENABLE_CDP_MODE,
+                    save_login_state=config.SAVE_LOGIN_STATE,
+                    persist_ok=getattr(self, "_session_persist_ok", False),
+                    browser_context=getattr(self, "browser_context", None),
+                    playwright_browser=getattr(self, "playwright_browser", None),
+                    platform=config.PLATFORM,
+                    log=utils.logger,
+                )
+                if not config.ENABLE_CDP_MODE:
+                    self.browser_context = None  # type: ignore[assignment]
+                    self.playwright_browser = None
 
     async def search(self) -> None:
         """
@@ -617,28 +635,18 @@ class TieBaCrawler(AbstractCrawler):
         utils.logger.info(
             "[BaiduTieBaCrawler.launch_browser] Begin create browser context ..."
         )
-        if config.SAVE_LOGIN_STATE:
-            # feat issue #14
-            # we will save login state to avoid login every time
-            user_data_dir = os.path.join(
-                os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM
-            )  # type: ignore
-            browser_context = await chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
-                accept_downloads=True,
-                headless=headless,
-                proxy=playwright_proxy,  # type: ignore
-                viewport={"width": 1920, "height": 1080},
-                user_agent=user_agent,
-                channel="chrome",  # Use system's stable Chrome version
-            )
-            return browser_context
-        else:
-            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="chrome")  # type: ignore
-            browser_context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080}, user_agent=user_agent
-            )
-            return browser_context
+        self.playwright_browser = None
+        state_path = session_path_for_platform(config.PLATFORM) if config.SAVE_LOGIN_STATE else None
+        browser, context = await attach_chromium_browser(
+            chromium,
+            headless=headless,
+            playwright_proxy=playwright_proxy,
+            user_agent=user_agent,
+            viewport={"width": 1920, "height": 1080},
+            storage_state_path=state_path,
+        )
+        self.playwright_browser = browser
+        return context
 
     async def launch_browser_with_cdp(
         self,
@@ -684,5 +692,15 @@ class TieBaCrawler(AbstractCrawler):
             await self.cdp_manager.cleanup()
             self.cdp_manager = None
         else:
-            await self.browser_context.close()
+            await finalize_standard_playwright(
+                use_cdp=False,
+                save_login_state=config.SAVE_LOGIN_STATE,
+                persist_ok=getattr(self, "_session_persist_ok", False),
+                browser_context=getattr(self, "browser_context", None),
+                playwright_browser=getattr(self, "playwright_browser", None),
+                platform=config.PLATFORM,
+                log=utils.logger,
+            )
+            self.browser_context = None  # type: ignore[assignment]
+            self.playwright_browser = None
         utils.logger.info("[BaiduTieBaCrawler.close] Browser context closed ...")

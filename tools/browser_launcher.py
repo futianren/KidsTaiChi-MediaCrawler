@@ -24,11 +24,55 @@ import subprocess
 import time
 import socket
 import signal
+import json
+import re
 from typing import Optional, List, Tuple
 import asyncio
 from pathlib import Path
 
+import config
 from tools import utils
+
+
+def resolve_chrome_profile_folder(user_data_dir: str) -> str:
+    """
+    当 user-data-dir 下存在多个 Chrome 资料（无 Default 或需固定其一）时，避免出现「谁在使用 Chrome」选择页。
+    优先根据 Local State 里 profile.info_cache 的 active_time 选最近使用的资料夹名。
+    """
+    if not user_data_dir or not os.path.isdir(user_data_dir):
+        return "Default"
+    local_state_path = os.path.join(user_data_dir, "Local State")
+    if os.path.isfile(local_state_path):
+        try:
+            with open(local_state_path, encoding="utf-8") as f:
+                data = json.load(f)
+            info_cache = (data.get("profile") or {}).get("info_cache") or {}
+            best_name, best_time = None, -1.0
+            for folder_name, meta in info_cache.items():
+                if not isinstance(meta, dict):
+                    continue
+                folder_path = os.path.join(user_data_dir, folder_name)
+                if not os.path.isdir(folder_path):
+                    continue
+                t = float(meta.get("active_time") or -1.0)
+                if t > best_time:
+                    best_time = t
+                    best_name = folder_name
+            if best_name:
+                return best_name
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    if os.path.isdir(os.path.join(user_data_dir, "Default")):
+        return "Default"
+    prof_dirs: List[Tuple[int, str]] = []
+    for name in os.listdir(user_data_dir):
+        m = re.match(r"^Profile (\d+)$", name)
+        if m and os.path.isdir(os.path.join(user_data_dir, name)):
+            prof_dirs.append((int(m.group(1)), name))
+    prof_dirs.sort()
+    if prof_dirs:
+        return prof_dirs[-1][1]
+    return "Default"
 
 
 class BrowserLauncher:
@@ -116,49 +160,69 @@ class BrowserLauncher:
 
         raise RuntimeError(f"Cannot find available port, tried {start_port} to {port-1}")
 
-    def launch_browser(self, browser_path: str, debug_port: int, headless: bool = False,
-                      user_data_dir: Optional[str] = None) -> subprocess.Popen:
+    def launch_browser(
+        self,
+        browser_path: str,
+        debug_port: int,
+        headless: bool = False,
+        user_data_dir: Optional[str] = None,
+        profile_directory: Optional[str] = None,
+    ) -> subprocess.Popen:
         """
         Launch browser process
         """
-        # Basic launch arguments
-        args = [
-            browser_path,
-            f"--remote-debugging-port={debug_port}",
-            "--remote-debugging-address=0.0.0.0",  # Allow remote access
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-background-timer-throttling",
-            "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-            "--disable-features=TranslateUI",
-            "--disable-ipc-flooding-protection",
-            "--disable-hang-monitor",
-            "--disable-prompt-on-repost",
-            "--disable-sync",
-            "--disable-dev-shm-usage",  # Avoid shared memory issues
-            "--no-sandbox",  # Disable sandbox in CDP mode
-            # Key anti-detection arguments
-            "--disable-blink-features=AutomationControlled",  # Disable automation control flag
-            "--exclude-switches=enable-automation",  # Exclude automation switch
-            "--disable-infobars",  # Disable info bars
-        ]
+        args: List[str] = [browser_path]
+
+        # 必须尽早指定资料目录，避免 Chrome 先弹出「谁在使用 Chrome」再被自动化关掉造成闪屏
+        if user_data_dir:
+            prof = (profile_directory or "").strip() or resolve_chrome_profile_folder(user_data_dir)
+            args.append(f"--user-data-dir={user_data_dir}")
+            args.append(f"--profile-directory={prof}")
+            utils.logger.info(f"[BrowserLauncher] Chrome profile-directory={prof!r} (user-data-dir set)")
+
+        args.extend(
+            [
+                f"--remote-debugging-port={debug_port}",
+                "--remote-debugging-address=0.0.0.0",  # Allow remote access
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-default-apps",
+                "--disable-search-engine-choice-screen",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                # TranslateUI 在部分旧版仍存在；ChromeSignin/AccountConsistency 减轻 Chrome 侧登录谷歌引导
+                "--disable-features=TranslateUI,ChromeSignin,AccountConsistency,PrivacySandboxSettings4",
+                "--disable-ipc-flooding-protection",
+                "--disable-hang-monitor",
+                "--disable-prompt-on-repost",
+                "--disable-sync",
+                "--disable-dev-shm-usage",  # Avoid shared memory issues
+                "--no-sandbox",  # Disable sandbox in CDP mode
+                # Key anti-detection arguments
+                "--disable-blink-features=AutomationControlled",  # Disable automation control flag
+                "--exclude-switches=enable-automation",  # Exclude automation switch
+                "--disable-infobars",  # Disable info bars
+            ]
+        )
+        if getattr(config, "PLAYWRIGHT_IGNORE_SYSTEM_PROXY", True):
+            args.append("--no-proxy-server")
 
         # Headless mode
         if headless:
-            args.extend([
-                "--headless=new",  # Use new headless mode
-                "--disable-gpu",
-            ])
+            args.extend(
+                [
+                    "--headless=new",  # Use new headless mode
+                    "--disable-gpu",
+                ]
+            )
         else:
             # Extra arguments for non-headless mode
-            args.extend([
-                "--start-maximized",  # Maximize window, more like real user
-            ])
-
-        # User data directory
-        if user_data_dir:
-            args.append(f"--user-data-dir={user_data_dir}")
+            args.extend(
+                [
+                    "--start-maximized",  # Maximize window, more like real user
+                ]
+            )
 
         utils.logger.info(f"[BrowserLauncher] Launching browser: {browser_path}")
         utils.logger.info(f"[BrowserLauncher] Debug port: {debug_port}")

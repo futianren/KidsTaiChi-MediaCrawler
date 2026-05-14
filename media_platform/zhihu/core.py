@@ -26,6 +26,7 @@ from asyncio import Task
 from typing import Dict, List, Optional, Tuple, cast
 
 from playwright.async_api import (
+    Browser,
     BrowserContext,
     BrowserType,
     Page,
@@ -41,6 +42,11 @@ from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
 from store import zhihu as zhihu_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
+from tools.playwright_session import (
+    attach_chromium_browser,
+    finalize_standard_playwright,
+    session_path_for_platform,
+)
 from var import crawler_type_var, source_keyword_var
 
 from .client import ZhiHuClient
@@ -54,6 +60,8 @@ class ZhihuCrawler(AbstractCrawler):
     zhihu_client: ZhiHuClient
     browser_context: BrowserContext
     cdp_manager: Optional[CDPBrowserManager]
+    playwright_browser: Optional[Browser]
+    _session_persist_ok: bool
 
     def __init__(self) -> None:
         self.index_url = "https://www.zhihu.com"
@@ -62,6 +70,8 @@ class ZhihuCrawler(AbstractCrawler):
         self.user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         self._extractor = ZhihuExtractor()
         self.cdp_manager = None
+        self.playwright_browser = None
+        self._session_persist_ok = False
         self.ip_proxy_pool = None  # Proxy IP pool for automatic proxy refresh
 
     async def start(self) -> None:
@@ -81,71 +91,81 @@ class ZhihuCrawler(AbstractCrawler):
             )
 
         async with async_playwright() as playwright:
-            # Choose launch mode based on configuration
-            if config.ENABLE_CDP_MODE:
-                utils.logger.info("[ZhihuCrawler] Launching browser in CDP mode")
-                self.browser_context = await self.launch_browser_with_cdp(
-                    playwright,
-                    playwright_proxy_format,
-                    self.user_agent,
-                    headless=config.CDP_HEADLESS,
-                )
-            else:
-                utils.logger.info("[ZhihuCrawler] Launching browser in standard mode")
-                # Launch a browser context.
-                chromium = playwright.chromium
-                self.browser_context = await self.launch_browser(
-                    chromium, None, self.user_agent, headless=config.HEADLESS
-                )
-                # stealth.min.js is a js script to prevent the website from detecting the crawler.
-                await self.browser_context.add_init_script(path="libs/stealth.min.js")
+            self._session_persist_ok = False
+            self.playwright_browser = None
+            try:
+                if config.ENABLE_CDP_MODE:
+                    utils.logger.info("[ZhihuCrawler] Launching browser in CDP mode")
+                    self.browser_context = await self.launch_browser_with_cdp(
+                        playwright,
+                        playwright_proxy_format,
+                        self.user_agent,
+                        headless=config.CDP_HEADLESS,
+                    )
+                else:
+                    utils.logger.info("[ZhihuCrawler] Launching browser in standard mode")
+                    chromium = playwright.chromium
+                    self.browser_context = await self.launch_browser(
+                        chromium, playwright_proxy_format, self.user_agent, headless=config.HEADLESS
+                    )
+                    await self.browser_context.add_init_script(path="libs/stealth.min.js")
 
-            self.context_page = await self.browser_context.new_page()
-            await self.context_page.goto(self.index_url, wait_until="domcontentloaded")
+                self.context_page = await self.browser_context.new_page()
+                await self.context_page.goto(self.index_url, wait_until="domcontentloaded")
 
-            # Create a client to interact with the zhihu website.
-            self.zhihu_client = await self.create_zhihu_client(httpx_proxy_format)
-            if not await self.zhihu_client.pong():
-                login_obj = ZhiHuLogin(
-                    login_type=config.LOGIN_TYPE,
-                    login_phone="",  # input your phone number
-                    browser_context=self.browser_context,
-                    context_page=self.context_page,
-                    cookie_str=config.COOKIES,
+                self.zhihu_client = await self.create_zhihu_client(httpx_proxy_format)
+                if not await self.zhihu_client.pong():
+                    login_obj = ZhiHuLogin(
+                        login_type=config.LOGIN_TYPE,
+                        login_phone="",
+                        browser_context=self.browser_context,
+                        context_page=self.context_page,
+                        cookie_str=config.COOKIES,
+                    )
+                    await login_obj.begin()
+                    await self.zhihu_client.update_cookies(
+                        browser_context=self.browser_context,
+                        urls=self.cookie_urls,
+                    )
+
+                utils.logger.info(
+                    "[ZhihuCrawler.start] Zhihu navigating to search page to get search page cookies, this process takes about 5 seconds"
                 )
-                await login_obj.begin()
+                await self.context_page.goto(
+                    f"{self.index_url}/search?q=python&search_source=Guess&utm_content=search_hot&type=content"
+                )
+                await asyncio.sleep(5)
                 await self.zhihu_client.update_cookies(
                     browser_context=self.browser_context,
                     urls=self.cookie_urls,
                 )
+                if await self.zhihu_client.pong():
+                    self._session_persist_ok = True
 
-            # Zhihu's search API requires opening the search page first to access cookies, homepage alone won't work
-            utils.logger.info(
-                "[ZhihuCrawler.start] Zhihu navigating to search page to get search page cookies, this process takes about 5 seconds"
-            )
-            await self.context_page.goto(
-                f"{self.index_url}/search?q=python&search_source=Guess&utm_content=search_hot&type=content"
-            )
-            await asyncio.sleep(5)
-            await self.zhihu_client.update_cookies(
-                browser_context=self.browser_context,
-                urls=self.cookie_urls,
-            )
+                crawler_type_var.set(config.CRAWLER_TYPE)
+                if config.CRAWLER_TYPE == "search":
+                    await self.search()
+                elif config.CRAWLER_TYPE == "detail":
+                    await self.get_specified_notes()
+                elif config.CRAWLER_TYPE == "creator":
+                    await self.get_creators_and_notes()
+                else:
+                    pass
 
-            crawler_type_var.set(config.CRAWLER_TYPE)
-            if config.CRAWLER_TYPE == "search":
-                # Search for notes and retrieve their comment information.
-                await self.search()
-            elif config.CRAWLER_TYPE == "detail":
-                # Get the information and comments of the specified post
-                await self.get_specified_notes()
-            elif config.CRAWLER_TYPE == "creator":
-                # Get creator's information and their notes and comments
-                await self.get_creators_and_notes()
-            else:
-                pass
-
-            utils.logger.info("[ZhihuCrawler.start] Zhihu Crawler finished ...")
+                utils.logger.info("[ZhihuCrawler.start] Zhihu Crawler finished ...")
+            finally:
+                await finalize_standard_playwright(
+                    use_cdp=config.ENABLE_CDP_MODE,
+                    save_login_state=config.SAVE_LOGIN_STATE,
+                    persist_ok=getattr(self, "_session_persist_ok", False),
+                    browser_context=getattr(self, "browser_context", None),
+                    playwright_browser=getattr(self, "playwright_browser", None),
+                    platform=config.PLATFORM,
+                    log=utils.logger,
+                )
+                if not config.ENABLE_CDP_MODE:
+                    self.browser_context = None  # type: ignore[assignment]
+                    self.playwright_browser = None
 
     async def search(self) -> None:
         """Search for notes and retrieve their comment information."""
@@ -433,28 +453,18 @@ class ZhihuCrawler(AbstractCrawler):
         utils.logger.info(
             "[ZhihuCrawler.launch_browser] Begin create browser context ..."
         )
-        if config.SAVE_LOGIN_STATE:
-            # feat issue #14
-            # we will save login state to avoid login every time
-            user_data_dir = os.path.join(
-                os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM
-            )  # type: ignore
-            browser_context = await chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
-                accept_downloads=True,
-                headless=headless,
-                proxy=playwright_proxy,  # type: ignore
-                viewport={"width": 1920, "height": 1080},
-                user_agent=user_agent,
-                channel="chrome",  # Use system Chrome stable version
-            )
-            return browser_context
-        else:
-            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="chrome")  # type: ignore
-            browser_context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080}, user_agent=user_agent
-            )
-            return browser_context
+        self.playwright_browser = None
+        state_path = session_path_for_platform(config.PLATFORM) if config.SAVE_LOGIN_STATE else None
+        browser, context = await attach_chromium_browser(
+            chromium,
+            headless=headless,
+            playwright_proxy=playwright_proxy,
+            user_agent=user_agent,
+            viewport={"width": 1920, "height": 1080},
+            storage_state_path=state_path,
+        )
+        self.playwright_browser = browser
+        return context
 
     async def launch_browser_with_cdp(
         self,
@@ -491,10 +501,19 @@ class ZhihuCrawler(AbstractCrawler):
 
     async def close(self):
         """Close browser context"""
-        # Special handling if using CDP mode
         if self.cdp_manager:
             await self.cdp_manager.cleanup()
             self.cdp_manager = None
         else:
-            await self.browser_context.close()
+            await finalize_standard_playwright(
+                use_cdp=False,
+                save_login_state=config.SAVE_LOGIN_STATE,
+                persist_ok=getattr(self, "_session_persist_ok", False),
+                browser_context=getattr(self, "browser_context", None),
+                playwright_browser=getattr(self, "playwright_browser", None),
+                platform=config.PLATFORM,
+                log=utils.logger,
+            )
+            self.browser_context = None  # type: ignore[assignment]
+            self.playwright_browser = None
         utils.logger.info("[ZhihuCrawler.close] Browser context closed ...")

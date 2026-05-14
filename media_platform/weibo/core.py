@@ -29,6 +29,7 @@ from asyncio import Task
 from typing import Dict, List, Optional, Tuple
 
 from playwright.async_api import (
+    Browser,
     BrowserContext,
     BrowserType,
     Page,
@@ -42,6 +43,11 @@ from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
 from store import weibo as weibo_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
+from tools.playwright_session import (
+    attach_chromium_browser,
+    finalize_standard_playwright,
+    session_path_for_platform,
+)
 from var import crawler_type_var, source_keyword_var
 
 from .client import WeiboClient
@@ -56,6 +62,8 @@ class WeiboCrawler(AbstractCrawler):
     wb_client: WeiboClient
     browser_context: BrowserContext
     cdp_manager: Optional[CDPBrowserManager]
+    playwright_browser: Optional[Browser]
+    _session_persist_ok: bool
 
     def __init__(self):
         self.index_url = "https://www.weibo.com"
@@ -64,6 +72,8 @@ class WeiboCrawler(AbstractCrawler):
         self.user_agent = utils.get_user_agent()
         self.mobile_user_agent = utils.get_mobile_user_agent()
         self.cdp_manager = None
+        self.playwright_browser = None
+        self._session_persist_ok = False
         self.ip_proxy_pool = None  # Proxy IP pool for automatic proxy refresh
 
     async def start(self):
@@ -74,65 +84,74 @@ class WeiboCrawler(AbstractCrawler):
             playwright_proxy_format, httpx_proxy_format = utils.format_proxy_info(ip_proxy_info)
 
         async with async_playwright() as playwright:
-            # Select launch mode based on configuration
-            if config.ENABLE_CDP_MODE:
-                utils.logger.info("[WeiboCrawler] Launching browser with CDP mode")
-                self.browser_context = await self.launch_browser_with_cdp(
-                    playwright,
-                    playwright_proxy_format,
-                    self.mobile_user_agent,
-                    headless=config.CDP_HEADLESS,
+            self._session_persist_ok = False
+            self.playwright_browser = None
+            try:
+                if config.ENABLE_CDP_MODE:
+                    utils.logger.info("[WeiboCrawler] Launching browser with CDP mode")
+                    self.browser_context = await self.launch_browser_with_cdp(
+                        playwright,
+                        playwright_proxy_format,
+                        self.mobile_user_agent,
+                        headless=config.CDP_HEADLESS,
+                    )
+                else:
+                    utils.logger.info("[WeiboCrawler] Launching browser with standard mode")
+                    chromium = playwright.chromium
+                    self.browser_context = await self.launch_browser(
+                        chromium, playwright_proxy_format, self.mobile_user_agent, headless=config.HEADLESS
+                    )
+                    await self.browser_context.add_init_script(path="libs/stealth.min.js")
+
+                self.context_page = await self.browser_context.new_page()
+                await self.context_page.goto(self.index_url)
+                await asyncio.sleep(2)
+
+                self.wb_client = await self.create_weibo_client(httpx_proxy_format)
+                if not await self.wb_client.pong():
+                    login_obj = WeiboLogin(
+                        login_type=config.LOGIN_TYPE,
+                        login_phone="",
+                        browser_context=self.browser_context,
+                        context_page=self.context_page,
+                        cookie_str=config.COOKIES,
+                    )
+                    await login_obj.begin()
+                    utils.logger.info(
+                        "[WeiboCrawler.start] redirect weibo mobile homepage and update cookies on mobile platform"
+                    )
+                    await self.context_page.goto(self.mobile_index_url)
+                    await asyncio.sleep(3)
+                    await self.wb_client.update_cookies(
+                        browser_context=self.browser_context,
+                        urls=self.cookie_urls,
+                    )
+                if await self.wb_client.pong():
+                    self._session_persist_ok = True
+
+                crawler_type_var.set(config.CRAWLER_TYPE)
+                if config.CRAWLER_TYPE == "search":
+                    await self.search()
+                elif config.CRAWLER_TYPE == "detail":
+                    await self.get_specified_notes()
+                elif config.CRAWLER_TYPE == "creator":
+                    await self.get_creators_and_notes()
+                else:
+                    pass
+                utils.logger.info("[WeiboCrawler.start] Weibo Crawler finished ...")
+            finally:
+                await finalize_standard_playwright(
+                    use_cdp=config.ENABLE_CDP_MODE,
+                    save_login_state=config.SAVE_LOGIN_STATE,
+                    persist_ok=getattr(self, "_session_persist_ok", False),
+                    browser_context=getattr(self, "browser_context", None),
+                    playwright_browser=getattr(self, "playwright_browser", None),
+                    platform=config.PLATFORM,
+                    log=utils.logger,
                 )
-            else:
-                utils.logger.info("[WeiboCrawler] Launching browser with standard mode")
-                # Launch a browser context.
-                chromium = playwright.chromium
-                self.browser_context = await self.launch_browser(chromium, None, self.mobile_user_agent, headless=config.HEADLESS)
-
-                # stealth.min.js is a js script to prevent the website from detecting the crawler.
-                await self.browser_context.add_init_script(path="libs/stealth.min.js")
-
-
-            self.context_page = await self.browser_context.new_page()
-            await self.context_page.goto(self.index_url)
-            await asyncio.sleep(2)
-
-
-            # Create a client to interact with the xiaohongshu website.
-            self.wb_client = await self.create_weibo_client(httpx_proxy_format)
-            if not await self.wb_client.pong():
-                login_obj = WeiboLogin(
-                    login_type=config.LOGIN_TYPE,
-                    login_phone="",  # your phone number
-                    browser_context=self.browser_context,
-                    context_page=self.context_page,
-                    cookie_str=config.COOKIES,
-                )
-                await login_obj.begin()
-
-                # After successful login, redirect to mobile website and update mobile cookies
-                utils.logger.info("[WeiboCrawler.start] redirect weibo mobile homepage and update cookies on mobile platform")
-                await self.context_page.goto(self.mobile_index_url)
-                await asyncio.sleep(3)
-                # Only get mobile cookies to avoid confusion between PC and mobile cookies
-                await self.wb_client.update_cookies(
-                    browser_context=self.browser_context,
-                    urls=self.cookie_urls,
-                )
-
-            crawler_type_var.set(config.CRAWLER_TYPE)
-            if config.CRAWLER_TYPE == "search":
-                # Search for video and retrieve their comment information.
-                await self.search()
-            elif config.CRAWLER_TYPE == "detail":
-                # Get the information and comments of the specified post
-                await self.get_specified_notes()
-            elif config.CRAWLER_TYPE == "creator":
-                # Get creator's information and their notes and comments
-                await self.get_creators_and_notes()
-            else:
-                pass
-            utils.logger.info("[WeiboCrawler.start] Weibo Crawler finished ...")
+                if not config.ENABLE_CDP_MODE:
+                    self.browser_context = None  # type: ignore[assignment]
+                    self.playwright_browser = None
 
     async def search(self):
         """
@@ -367,25 +386,18 @@ class WeiboCrawler(AbstractCrawler):
     ) -> BrowserContext:
         """Launch browser and create browser context"""
         utils.logger.info("[WeiboCrawler.launch_browser] Begin create browser context ...")
-        if config.SAVE_LOGIN_STATE:
-            user_data_dir = os.path.join(os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM)  # type: ignore
-            browser_context = await chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
-                accept_downloads=True,
-                headless=headless,
-                proxy=playwright_proxy,  # type: ignore
-                viewport={
-                    "width": 1920,
-                    "height": 1080
-                },
-                user_agent=user_agent,
-                channel="chrome",  # Use system's Chrome stable version
-            )
-            return browser_context
-        else:
-            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="chrome")  # type: ignore
-            browser_context = await browser.new_context(viewport={"width": 1920, "height": 1080}, user_agent=user_agent)
-            return browser_context
+        self.playwright_browser = None
+        state_path = session_path_for_platform(config.PLATFORM) if config.SAVE_LOGIN_STATE else None
+        browser, context = await attach_chromium_browser(
+            chromium,
+            headless=headless,
+            playwright_proxy=playwright_proxy,
+            user_agent=user_agent,
+            viewport={"width": 1920, "height": 1080},
+            storage_state_path=state_path,
+        )
+        self.playwright_browser = browser
+        return context
 
     async def launch_browser_with_cdp(
         self,
@@ -475,10 +487,19 @@ class WeiboCrawler(AbstractCrawler):
 
     async def close(self):
         """Close browser context"""
-        # Special handling if using CDP mode
         if self.cdp_manager:
             await self.cdp_manager.cleanup()
             self.cdp_manager = None
         else:
-            await self.browser_context.close()
+            await finalize_standard_playwright(
+                use_cdp=False,
+                save_login_state=config.SAVE_LOGIN_STATE,
+                persist_ok=getattr(self, "_session_persist_ok", False),
+                browser_context=getattr(self, "browser_context", None),
+                playwright_browser=getattr(self, "playwright_browser", None),
+                platform=config.PLATFORM,
+                log=utils.logger,
+            )
+            self.browser_context = None  # type: ignore[assignment]
+            self.playwright_browser = None
         utils.logger.info("[WeiboCrawler.close] Browser context closed ...")

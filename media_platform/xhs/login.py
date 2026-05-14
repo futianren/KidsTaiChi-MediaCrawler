@@ -37,8 +37,9 @@ from tools import utils
 
 async def try_load_saved_xhs_cookies(browser_context: BrowserContext) -> bool:
     """
-    若存在 data/xhs_browser_cookies.json（由 tools/export_xhs_cookies.py 生成），
-    在首次访问首页前注入，便于无头复用已登录态。
+    遗留兜底：仅当未使用 cookiesFile/<platform>/session.json 恢复会话时，
+    若存在 data/xhs_browser_cookies.json（可由 export_xhs_cookies 导出），在首页前注入。
+    与 TikTok_Video 单文件 storage_state 一致：有 session.json 时 core 不再调用本函数。
     """
     path = os.path.normpath(os.path.join(os.getcwd(), "data", "xhs_browser_cookies.json"))
     if not os.path.isfile(path):
@@ -204,6 +205,11 @@ class XiaoHongShuLogin(AbstractLogin):
     async def login_by_qrcode(self):
         """login xiaohongshu website and keep webdriver login state"""
         utils.logger.info("[XiaoHongShuLogin.login_by_qrcode] Begin login xiaohongshu by qrcode ...")
+        utils.logger.info(
+            "[XiaoHongShuLogin.login_by_qrcode] 若 Chrome 弹出「登录 Google / Chrome 账号」：请选「不使用账号继续」或关闭，"
+            "无需绑定谷歌账号；仅需在小红书页面扫码登录。开启 SAVE_LOGIN_STATE 时会在登录通过后及任务结束时写入 cookiesFile/xhs/session.json；"
+            "也可用 python tools/export_xhs_cookies.py 导出为 data/xhs_browser_cookies.json。"
+        )
         # login_selector = "div.login-container > div.left > div.qrcode > img"
         qrcode_img_selector = "xpath=//img[@class='qrcode-img']"
         # find login qrcode
@@ -258,3 +264,4 @@ class XiaoHongShuLogin(AbstractLogin):
                 )
             except Exception as e:
                 utils.logger.warning(f"[XiaoHongShuLogin.login_by_cookies] skip cookie {key!r}: {e}")
+        # 不在此处 reload：部分 CDP+无头环境下整页 reload 易触发连接断开；Cookie 已写入 context，后续 update_cookies 会正确导出

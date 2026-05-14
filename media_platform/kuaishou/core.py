@@ -26,6 +26,7 @@ from asyncio import Task
 from typing import Dict, List, Optional, Tuple
 
 from playwright.async_api import (
+    Browser,
     BrowserContext,
     BrowserType,
     Page,
@@ -40,6 +41,11 @@ from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
 from store import kuaishou as kuaishou_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
+from tools.playwright_session import (
+    attach_chromium_browser,
+    finalize_standard_playwright,
+    session_path_for_platform,
+)
 from var import comment_tasks_var, crawler_type_var, source_keyword_var
 
 from .client import KuaiShouClient
@@ -53,12 +59,16 @@ class KuaishouCrawler(AbstractCrawler):
     ks_client: KuaiShouClient
     browser_context: BrowserContext
     cdp_manager: Optional[CDPBrowserManager]
+    playwright_browser: Optional[Browser]
+    _session_persist_ok: bool
 
     def __init__(self):
         self.index_url = "https://www.kuaishou.com"
         self.cookie_urls = [self.index_url]
         self.user_agent = utils.get_user_agent()
         self.cdp_manager = None
+        self.playwright_browser = None
+        self._session_persist_ok = False
         self.ip_proxy_pool = None  # Proxy IP pool, used for automatic proxy refresh
 
     async def start(self):
@@ -73,59 +83,69 @@ class KuaishouCrawler(AbstractCrawler):
             )
 
         async with async_playwright() as playwright:
-            # Select startup mode based on configuration
-            if config.ENABLE_CDP_MODE:
-                utils.logger.info("[KuaishouCrawler] Launching browser using CDP mode")
-                self.browser_context = await self.launch_browser_with_cdp(
-                    playwright,
-                    playwright_proxy_format,
-                    self.user_agent,
-                    headless=config.CDP_HEADLESS,
+            self._session_persist_ok = False
+            self.playwright_browser = None
+            try:
+                if config.ENABLE_CDP_MODE:
+                    utils.logger.info("[KuaishouCrawler] Launching browser using CDP mode")
+                    self.browser_context = await self.launch_browser_with_cdp(
+                        playwright,
+                        playwright_proxy_format,
+                        self.user_agent,
+                        headless=config.CDP_HEADLESS,
+                    )
+                else:
+                    utils.logger.info("[KuaishouCrawler] Launching browser using standard mode")
+                    chromium = playwright.chromium
+                    self.browser_context = await self.launch_browser(
+                        chromium, playwright_proxy_format, self.user_agent, headless=config.HEADLESS
+                    )
+                    await self.browser_context.add_init_script(path="libs/stealth.min.js")
+
+                self.context_page = await self.browser_context.new_page()
+                await self.context_page.goto(f"{self.index_url}?isHome=1")
+
+                self.ks_client = await self.create_ks_client(httpx_proxy_format)
+                if not await self.ks_client.pong():
+                    login_obj = KuaishouLogin(
+                        login_type=config.LOGIN_TYPE,
+                        login_phone=httpx_proxy_format,
+                        browser_context=self.browser_context,
+                        context_page=self.context_page,
+                        cookie_str=config.COOKIES,
+                    )
+                    await login_obj.begin()
+                    await self.ks_client.update_cookies(
+                        browser_context=self.browser_context,
+                        urls=self.cookie_urls,
+                    )
+                if await self.ks_client.pong():
+                    self._session_persist_ok = True
+
+                crawler_type_var.set(config.CRAWLER_TYPE)
+                if config.CRAWLER_TYPE == "search":
+                    await self.search()
+                elif config.CRAWLER_TYPE == "detail":
+                    await self.get_specified_videos()
+                elif config.CRAWLER_TYPE == "creator":
+                    await self.get_creators_and_videos()
+                else:
+                    pass
+
+                utils.logger.info("[KuaishouCrawler.start] Kuaishou Crawler finished ...")
+            finally:
+                await finalize_standard_playwright(
+                    use_cdp=config.ENABLE_CDP_MODE,
+                    save_login_state=config.SAVE_LOGIN_STATE,
+                    persist_ok=getattr(self, "_session_persist_ok", False),
+                    browser_context=getattr(self, "browser_context", None),
+                    playwright_browser=getattr(self, "playwright_browser", None),
+                    platform=config.PLATFORM,
+                    log=utils.logger,
                 )
-            else:
-                utils.logger.info("[KuaishouCrawler] Launching browser using standard mode")
-                # Launch a browser context.
-                chromium = playwright.chromium
-                self.browser_context = await self.launch_browser(
-                    chromium, None, self.user_agent, headless=config.HEADLESS
-                )
-                # stealth.min.js is a js script to prevent the website from detecting the crawler.
-                await self.browser_context.add_init_script(path="libs/stealth.min.js")
-
-
-            self.context_page = await self.browser_context.new_page()
-            await self.context_page.goto(f"{self.index_url}?isHome=1")
-
-            # Create a client to interact with the kuaishou website.
-            self.ks_client = await self.create_ks_client(httpx_proxy_format)
-            if not await self.ks_client.pong():
-                login_obj = KuaishouLogin(
-                    login_type=config.LOGIN_TYPE,
-                    login_phone=httpx_proxy_format,
-                    browser_context=self.browser_context,
-                    context_page=self.context_page,
-                    cookie_str=config.COOKIES,
-                )
-                await login_obj.begin()
-                await self.ks_client.update_cookies(
-                    browser_context=self.browser_context,
-                    urls=self.cookie_urls,
-                )
-
-            crawler_type_var.set(config.CRAWLER_TYPE)
-            if config.CRAWLER_TYPE == "search":
-                # Search for videos and retrieve their comment information.
-                await self.search()
-            elif config.CRAWLER_TYPE == "detail":
-                # Get the information and comments of the specified post
-                await self.get_specified_videos()
-            elif config.CRAWLER_TYPE == "creator":
-                # Get creator's information and their videos and comments
-                await self.get_creators_and_videos()
-            else:
-                pass
-
-            utils.logger.info("[KuaishouCrawler.start] Kuaishou Crawler finished ...")
+                if not config.ENABLE_CDP_MODE:
+                    self.browser_context = None  # type: ignore[assignment]
+                    self.playwright_browser = None
 
     async def search(self):
         utils.logger.info("[KuaishouCrawler.search] Begin search kuaishou keywords")
@@ -337,26 +357,18 @@ class KuaishouCrawler(AbstractCrawler):
         utils.logger.info(
             "[KuaishouCrawler.launch_browser] Begin create browser context ..."
         )
-        if config.SAVE_LOGIN_STATE:
-            user_data_dir = os.path.join(
-                os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM
-            )  # type: ignore
-            browser_context = await chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
-                accept_downloads=True,
-                headless=headless,
-                proxy=playwright_proxy,  # type: ignore
-                viewport={"width": 1920, "height": 1080},
-                user_agent=user_agent,
-                channel="chrome",  # Use system's stable Chrome version
-            )
-            return browser_context
-        else:
-            browser = await chromium.launch(headless=headless, proxy=playwright_proxy, channel="chrome")  # type: ignore
-            browser_context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080}, user_agent=user_agent
-            )
-            return browser_context
+        self.playwright_browser = None
+        state_path = session_path_for_platform(config.PLATFORM) if config.SAVE_LOGIN_STATE else None
+        browser, context = await attach_chromium_browser(
+            chromium,
+            headless=headless,
+            playwright_proxy=playwright_proxy,
+            user_agent=user_agent,
+            viewport={"width": 1920, "height": 1080},
+            storage_state_path=state_path,
+        )
+        self.playwright_browser = browser
+        return context
 
     async def launch_browser_with_cdp(
         self,
@@ -442,10 +454,19 @@ class KuaishouCrawler(AbstractCrawler):
 
     async def close(self):
         """Close browser context"""
-        # If using CDP mode, need special handling
         if self.cdp_manager:
             await self.cdp_manager.cleanup()
             self.cdp_manager = None
         else:
-            await self.browser_context.close()
+            await finalize_standard_playwright(
+                use_cdp=False,
+                save_login_state=config.SAVE_LOGIN_STATE,
+                persist_ok=getattr(self, "_session_persist_ok", False),
+                browser_context=getattr(self, "browser_context", None),
+                playwright_browser=getattr(self, "playwright_browser", None),
+                platform=config.PLATFORM,
+                log=utils.logger,
+            )
+            self.browser_context = None  # type: ignore[assignment]
+            self.playwright_browser = None
         utils.logger.info("[KuaishouCrawler.close] Browser context closed ...")

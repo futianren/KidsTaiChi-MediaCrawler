@@ -63,7 +63,8 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         else:
             self._host = "https://edith.xiaohongshu.com"
             self._domain = "https://www.xiaohongshu.com"
-        self.cookie_urls = [self._domain]
+        # Playwright 按 URL 过滤 cookie 时，仅传 www 会漏掉仅绑定 API 域（如 edith）的 cookie，导致接口报「登录已过期」
+        self.cookie_urls = [self._domain, self._host]
         self.IP_ERROR_STR = "Network connection error, please check network settings or restart"
         self.IP_ERROR_CODE = 300012
         self.NOTE_NOT_FOUND_CODE = -510000
@@ -615,6 +616,8 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         result = []
         notes_has_more = True
         notes_cursor = ""
+        list_pages_fetched = 0
+        max_list_pages = int(getattr(config, "XHS_CREATOR_MAX_LIST_PAGES", 0) or 0)
         while notes_has_more and len(result) < config.CRAWLER_MAX_NOTES_COUNT:
             notes_res = await self.get_notes_by_creator(
                 user_id, notes_cursor, xsec_token=xsec_token, xsec_source=xsec_source
@@ -647,6 +650,13 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
                 await callback(notes_to_add)
 
             result.extend(notes_to_add)
+            list_pages_fetched += 1
+            if max_list_pages > 0 and list_pages_fetched >= max_list_pages:
+                utils.logger.info(
+                    "[XiaoHongShuClient.get_all_notes_by_creator] XHS_CREATOR_MAX_LIST_PAGES=%s，停止翻页",
+                    max_list_pages,
+                )
+                break
             await asyncio.sleep(crawl_interval)
 
         utils.logger.info(

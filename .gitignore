@@ -164,6 +164,10 @@ cython_debug/
 .idea
 /temp_image/
 /browser_data/
+/cookiesFile/
+# 但允许提交 session.json（用于 CI）
+!/cookiesFile/xhs/
+!/cookiesFile/xhs/session.json
 
 */.DS_Store
 .vscode
@@ -182,3 +186,6 @@ database/*.db
 # Local debug / export artifacts (do not commit)
 tmp_req_*.network-response
 xhs_notes_*.csv
+
+# Feishu / Lark credentials（从 feishu_secrets_local.example.py 复制为本文件）
+config/feishu_secrets_local.py

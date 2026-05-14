@@ -24,6 +24,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from store.xhs import XhsStoreFactory
+from store.excel_store_base import ExcelStoreBase
 from store.xhs._store_impl import (
     XhsCsvStoreImplement,
     XhsJsonStoreImplement,
@@ -31,7 +32,6 @@ from store.xhs._store_impl import (
     XhsDbStoreImplement,
     XhsSqliteStoreImplement,
     XhsMongoStoreImplement,
-    XhsExcelStoreImplement
 )
 
 
@@ -70,10 +70,9 @@ class TestXhsStoreFactory:
 
     @patch('config.SAVE_DATA_OPTION', 'excel')
     def test_create_excel_store(self):
-        """Test creating Excel store"""
-        # ContextVar cannot be mocked, so we test with actual value
+        """Test creating Excel store (factory returns ExcelStoreBase singleton via __new__)"""
         store = XhsStoreFactory.create_store()
-        assert isinstance(store, XhsExcelStoreImplement)
+        assert isinstance(store, ExcelStoreBase)
 
     @patch('config.SAVE_DATA_OPTION', 'jsonl')
     def test_create_jsonl_store(self):

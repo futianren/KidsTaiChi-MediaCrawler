@@ -41,16 +41,32 @@ IP_PROXY_PROVIDER_NAME = "kuaidaili"  # kuaidaili | wandouhttp
 # Setting False will open a browser
 # If Xiaohongshu keeps scanning the code to log in but fails, open the browser and manually pass the sliding verification code.
 # If Douyin keeps prompting failure, open the browser and see if mobile phone number verification appears after scanning the QR code to log in. If it does, manually go through it and try again.
-HEADLESS = False
+# 项目默认无头：批量/服务器环境不弹窗；需过滑块/验证码时可改为 False 或命令行 --headless false
+HEADLESS = True
 
 # Whether to save login status
 SAVE_LOGIN_STATE = True
+
+# ==================== Playwright storage_state（非 CDP 默认）====================
+# 会话文件根目录（相对项目工作目录）；每平台子目录下放 COOKIES_STORAGE_FILENAME
+COOKIES_STORAGE_ROOT = "cookiesFile"
+COOKIES_STORAGE_FILENAME = "session.json"
+# 可选：使用本机 Google Chrome 通道（需已安装 Chrome）。空字符串表示由代码按平台决定（xhs/dy 等默认 channel=chrome）。
+PLAYWRIGHT_CHANNEL = ""
+# 可选：浏览器可执行文件路径（例如 C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe）。
+# 与参考项目 conf.py 的 LOCAL_CHROME_PATH 同义：指向本机 chrome.exe；非空时优先于 PLAYWRIGHT_CHANNEL。
+# 一般不必填写：默认 channel=chrome 已会启动本机已安装的 Google Chrome。
+PLAYWRIGHT_EXECUTABLE_PATH = ""
+# 为 True 时，启动的 Chromium/Chrome 不使用系统/环境变量中的代理（WinINet、PAC、HTTP_PROXY 等）。
+# 开启 ENABLE_IP_PROXY 时仍通过 Playwright 的 context proxy 走 IP 池；若与第三方代理工具冲突可改为 False。
+PLAYWRIGHT_IGNORE_SYSTEM_PROXY = True
 
 # ==================== CDP (Chrome DevTools Protocol) 配置 ====================
 # 是否启用 CDP 模式 - 使用用户本地的 Chrome/Edge 浏览器进行爬取，具有更好的反检测能力
 # 开启后，会自动检测并启动用户的 Chrome/Edge 浏览器，通过 CDP 协议进行控制
 # 该方式使用真实浏览器环境，包括用户的扩展、Cookie 和设置，大幅降低被风控检测的风险
-ENABLE_CDP_MODE = True
+# 默认 False：使用自启 Chromium/Chrome + cookiesFile/<platform>/session.json 持久化
+ENABLE_CDP_MODE = False
 
 # CDP 调试端口，用于与浏览器通信
 # 如果端口被占用，系统会自动尝试下一个可用端口
@@ -67,7 +83,8 @@ CUSTOM_BROWSER_PATH = ""
 
 # 是否在 CDP 模式下启用无头模式
 # 注意：即使设置为 True，某些反检测功能在无头模式下可能无法正常工作
-CDP_HEADLESS = False
+# 与 HEADLESS 默认一致；命令行 --headless 会同时覆盖 HEADLESS 与 CDP_HEADLESS
+CDP_HEADLESS = True
 
 # 浏览器启动超时时间（秒）
 BROWSER_LAUNCH_TIMEOUT = 60
@@ -131,6 +148,7 @@ CRAWLER_MAX_SLEEP_SEC = 2
 DISABLE_SSL_VERIFY = False
 
 from .bilibili_config import *
+from .feishu_config import *
 from .xhs_config import *
 from .dy_config import *
 from .ks_config import *

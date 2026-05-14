@@ -91,6 +91,25 @@ def _to_bool(value: bool | str) -> bool:
     return str2bool(value)
 
 
+def _maybe_apply_xhs_crawl_preset_baseline(xhs_crawl_preset_cli: str) -> None:
+    """
+    当 platform 已为 xhs 且预设为 feishu_minimal 时，先写入一组省流默认值；
+    随后仍由 --get_comment / --get_medias 等单项参数覆盖。
+    含：关评论/子评论/媒体、跳过创作者资料 HTML、仅视频笔记、feishu_plus 落盘。
+    """
+    if getattr(config, "PLATFORM", "") != "xhs":
+        return
+    raw = (xhs_crawl_preset_cli or getattr(config, "XHS_CRAWL_PRESET", "none") or "none").strip().lower()
+    if raw != "feishu_minimal":
+        return
+    config.ENABLE_GET_COMMENTS = False
+    config.ENABLE_GET_SUB_COMMENTS = False
+    config.ENABLE_GET_MEIDAS = False
+    config.XHS_FETCH_CREATOR_PROFILE = False
+    config.XHS_CREATOR_ONLY_VIDEO_NOTES = True
+    config.XHS_NOTE_PERSIST_MODE = "feishu_plus"
+
+
 def _coerce_enum(
     enum_cls: Type[EnumT],
     value: EnumT | str,
@@ -200,6 +219,23 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 show_default=True,
             ),
         ] = str(config.ENABLE_GET_SUB_COMMENTS),
+        get_medias: Annotated[
+            str,
+            typer.Option(
+                "--get_medias",
+                help="Whether to download note images/videos to local (xhs), supports yes/true/t/y/1 or no/false/f/n/0",
+                rich_help_panel="Media Configuration",
+                show_default=True,
+            ),
+        ] = str(config.ENABLE_GET_MEIDAS),
+        xhs_crawl_preset: Annotated[
+            str,
+            typer.Option(
+                "--xhs_crawl_preset",
+                help="XHS only: none | feishu_minimal (baseline low-cost flags; overridden by explicit options below)",
+                rich_help_panel="Xiaohongshu Configuration",
+            ),
+        ] = "",
         headless: Annotated[
             str,
             typer.Option(
@@ -248,6 +284,22 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             typer.Option(
                 "--creator_id",
                 help="Creator ID list in creator mode, multiple IDs separated by commas (supports full URL or ID)",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = "",
+        project: Annotated[
+            str,
+            typer.Option(
+                "--project",
+                help="Project identifier for multi-project management (e.g., kids_taichi, modern_taichi)",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = "",
+        projects: Annotated[
+            str,
+            typer.Option(
+                "--projects",
+                help="Execute multiple projects sequentially, separated by commas (e.g., kids_taichi,modern_taichi)",
                 rich_help_panel="Basic Configuration",
             ),
         ] = "",
@@ -303,10 +355,6 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
     ) -> SimpleNamespace:
         """MediaCrawler 命令行入口"""
 
-        enable_comment = _to_bool(get_comment)
-        enable_sub_comment = _to_bool(get_sub_comment)
-        enable_headless = _to_bool(headless)
-        enable_ip_proxy_value = _to_bool(enable_ip_proxy)
         init_db_value = init_db.value if init_db else None
 
         # Parse specified_id and creator_id into lists
@@ -317,10 +365,19 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         config.PLATFORM = platform.value
         config.LOGIN_TYPE = lt.value
         config.CRAWLER_TYPE = crawler_type.value
+        _maybe_apply_xhs_crawl_preset_baseline(xhs_crawl_preset)
+
+        enable_comment = _to_bool(get_comment)
+        enable_sub_comment = _to_bool(get_sub_comment)
+        enable_medias = _to_bool(get_medias)
+        enable_headless = _to_bool(headless)
+        enable_ip_proxy_value = _to_bool(enable_ip_proxy)
+
         config.START_PAGE = start
         config.KEYWORDS = keywords
         config.ENABLE_GET_COMMENTS = enable_comment
         config.ENABLE_GET_SUB_COMMENTS = enable_sub_comment
+        config.ENABLE_GET_MEIDAS = enable_medias
         config.HEADLESS = enable_headless
         config.CDP_HEADLESS = enable_headless
         config.SAVE_DATA_OPTION = save_data_option.value
@@ -365,12 +422,16 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             keywords=config.KEYWORDS,
             get_comment=config.ENABLE_GET_COMMENTS,
             get_sub_comment=config.ENABLE_GET_SUB_COMMENTS,
+            get_medias=config.ENABLE_GET_MEIDAS,
+            xhs_crawl_preset=xhs_crawl_preset,
             headless=config.HEADLESS,
             save_data_option=config.SAVE_DATA_OPTION,
             init_db=init_db_value,
             cookies=config.COOKIES,
             specified_id=specified_id,
             creator_id=creator_id,
+            project=project,
+            projects=projects,
         )
 
     command = typer.main.get_command(app)

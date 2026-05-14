@@ -145,6 +145,31 @@ def convert_cookies(cookies: Optional[List[Cookie]]) -> Tuple[str, Dict]:
     return cookies_str, cookie_dict
 
 
+def dedupe_playwright_cookies_by_domain_specificity(cookies: Optional[List[Dict]]) -> List[Dict]:
+    """
+    Playwright may return the same cookie name for multiple domains (e.g. acw_tc on www vs edith).
+    Building a single Cookie header with duplicates can break API auth. Keep the most specific domain.
+    """
+    if not cookies:
+        return []
+    by_name: Dict[str, Dict] = {}
+    for c in cookies:
+        if not isinstance(c, dict):
+            continue
+        name = c.get("name")
+        if not name:
+            continue
+        prev = by_name.get(name)
+        if prev is None:
+            by_name[name] = c
+            continue
+        d_prev = (prev.get("domain") or "").lstrip(".")
+        d_new = (c.get("domain") or "").lstrip(".")
+        if len(d_new) > len(d_prev):
+            by_name[name] = c
+    return list(by_name.values())
+
+
 async def convert_browser_context_cookies(
     browser_context: BrowserContext, urls: Optional[List[str]] = None
 ) -> Tuple[str, Dict]:
@@ -153,6 +178,7 @@ async def convert_browser_context_cookies(
         if urls
         else await browser_context.cookies()
     )
+    cookies = dedupe_playwright_cookies_by_domain_specificity(cookies)
     return convert_cookies(cookies)
 
 

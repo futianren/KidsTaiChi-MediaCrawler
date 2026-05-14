@@ -23,6 +23,7 @@ import json
 import random
 import time
 import urllib.parse
+from typing import Any, Dict, Optional
 
 from model.m_xiaohongshu import NoteUrlInfo, CreatorUrlInfo
 from tools.crawler_util import extract_url_params_to_dict
@@ -345,6 +346,87 @@ def parse_creator_info_from_url(url: str) -> CreatorUrlInfo:
         return CreatorUrlInfo(user_id=user_id, xsec_token=xsec_token, xsec_source=xsec_source)
 
     raise ValueError(f"Unable to parse creator info from URL: {url}")
+
+
+def is_xhs_video_note(note: Optional[Dict[str, Any]]) -> bool:
+    """小红书笔记详情/列表项中 type==video 视为视频笔记。"""
+    if not note:
+        return False
+    return str(note.get("type") or "").strip().lower() == "video"
+
+
+def xhs_creator_list_note_id(item: Optional[Dict[str, Any]]) -> str:
+    """user_posted 列表项里笔记 ID 可能出现在 note_id / id 等字段。"""
+    if not item:
+        return ""
+    for key in ("note_id", "id", "noteId"):
+        v = item.get(key)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return ""
+
+
+def creator_list_item_to_note_item(
+    item: Dict[str, Any],
+    *,
+    default_xsec_source: str = "",
+    profile_xsec_token: str = "",
+) -> Optional[Dict[str, Any]]:
+    """
+    将创作者主页「列表」单条记录转成与详情接口尽量兼容的 dict，供 update_xhs_note 使用。
+    列表缺字段时用空结构占位，避免 store 里 .get 链报错。
+    """
+    nid = xhs_creator_list_note_id(item)
+    if not nid:
+        return None
+    xtok = str(item.get("xsec_token") or "").strip() or str(profile_xsec_token or "").strip()
+    xsrc = str(item.get("xsec_source") or default_xsec_source or "pc_note").strip() or "pc_note"
+    title = str(item.get("title") or item.get("display_title") or "").strip()
+    desc = str(item.get("desc") or "").strip()
+    if not title and desc:
+        title = desc[:255]
+    typ_raw = item.get("type")
+    typ = str(typ_raw).strip().lower() if typ_raw is not None else ""
+
+    user = item.get("user")
+    if not isinstance(user, dict):
+        user = {}
+    interact = item.get("interact_info")
+    if not isinstance(interact, dict):
+        interact = {}
+    images = item.get("image_list")
+    if not isinstance(images, list):
+        images = []
+    tags = item.get("tag_list")
+    if not isinstance(tags, list):
+        tags = []
+
+    return {
+        "note_id": nid,
+        "title": title,
+        "desc": desc,
+        "type": typ or None,
+        "xsec_token": xtok,
+        "xsec_source": xsrc,
+        "user": user,
+        "interact_info": interact,
+        "image_list": images,
+        "tag_list": tags,
+        "time": item.get("time"),
+        "last_update_time": item.get("last_update_time", 0),
+        "ip_location": item.get("ip_location", ""),
+    }
+
+
+def should_skip_xhs_note_detail_fetch(note: Optional[Dict[str, Any]]) -> bool:
+    """
+    创作者主页列表接口若已给出 type 且非 video，则无需再拉详情（图文等）。
+    type 为空时返回 False，需拉详情后再判断。
+    """
+    if not note:
+        return False
+    t = str(note.get("type") or "").strip().lower()
+    return bool(t) and t != "video"
 
 
 if __name__ == '__main__':

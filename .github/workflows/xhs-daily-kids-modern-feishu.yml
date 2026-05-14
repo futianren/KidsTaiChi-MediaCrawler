@@ -1,0 +1,105 @@
+name: XHS daily — kids & modern → Feishu
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 北京时间每日 02:00（UTC 前一日 18:00）
+    - cron: "0 18 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xhs-daily-kids-modern-feishu
+  cancel-in-progress: false
+
+jobs:
+  crawl-and-notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TZ: Asia/Shanghai
+      FEISHU_SYNC_ENABLED: "true"
+      FEISHU_SYNC_CRAWLER_TYPES: creator
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+      PYTHONUTF8: "1"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Install Playwright Chromium
+        run: uv run playwright install --with-deps chromium
+
+      - name: Disable CDP for CI
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("config/base_config.py")
+          s = p.read_text(encoding="utf-8")
+          s = re.sub(r"(?m)^ENABLE_CDP_MODE\s*=\s*True\s*$", "ENABLE_CDP_MODE = False", s)
+          s = re.sub(r"(?m)^CDP_CONNECT_EXISTING\s*=\s*True\s*$", "CDP_CONNECT_EXISTING = False", s)
+          p.write_text(s, encoding="utf-8")
+          print("Patched config/base_config.py for CI.")
+          PY
+
+      - name: Verify secrets
+        run: |
+          set -euo pipefail
+          for n in FEISHU_APP_ID FEISHU_APP_SECRET FEISHU_WEBHOOK; do
+            if [[ -z "${!n:-}" ]]; then
+              echo "::error::Missing repository secret: $n"
+              exit 1
+            fi
+          done
+
+      - name: Verify session.json exists
+        run: |
+          set -euo pipefail
+          if [[ ! -f cookiesFile/xhs/session.json ]]; then
+            echo "::error::Missing cookiesFile/xhs/session.json"
+            exit 1
+          fi
+          echo "✅ session.json found"
+
+      - name: Run XHS creator (kids_taichi + modern_taichi)
+        id: crawl
+        run: |
+          set -euo pipefail
+          uv run python main.py \
+            --platform xhs \
+            --type creator \
+            --lt cookie \
+            --projects kids_taichi,modern_taichi \
+            --xhs_crawl_preset feishu_minimal \
+            --headless true \
+            --get_comment false \
+            --save_data_option jsonl
+
+      - name: Feishu webhook summary
+        if: always()
+        run: uv run python scripts/ci_xhs_feishu_notify.py
+
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xhs-daily-ci
+          if-no-files-found: ignore
+          path: |
+            data/ci_all_projects_summary.json
+            projects/kids_taichi/data/**/*
+            projects/modern_taichi/data/**/*

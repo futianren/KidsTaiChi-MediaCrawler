@@ -31,6 +31,10 @@ if sys.stderr and hasattr(sys.stderr, 'buffer'):
 
 import asyncio
 from typing import Optional, Type
+import json
+import time
+from datetime import datetime
+from pathlib import Path
 
 import cmd_arg
 import config
@@ -44,6 +48,7 @@ from media_platform.weibo import WeiboCrawler
 from media_platform.xhs import XiaoHongShuCrawler
 from media_platform.zhihu import ZhihuCrawler
 from tools.async_file_writer import AsyncFileWriter
+from tools import utils
 from var import crawler_type_var
 
 
@@ -106,14 +111,123 @@ async def main() -> None:
         print(f"Database {args.init_db} initialized successfully.")
         return
 
-    crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
-    await crawler.start()
+    # 项目配置处理（仅在 creator 模式下）
+    project_ids = []
+    if config.CRAWLER_TYPE == "creator" and config.PLATFORM == "xhs":
+        # 如果命令行指定了 creator_id，不使用项目配置
+        if not args.creator_id:
+            from tools.project_loader import (
+                apply_project_config,
+                get_project_name,
+                get_default_project,
+                validate_project_config,
+            )
 
-    _flush_excel_if_needed()
+            # 确定要执行的项目列表
+            if args.projects:  # 多项目顺序执行
+                project_ids = [p.strip() for p in args.projects.split(",") if p.strip()]
+            elif args.project:  # 单项目
+                project_ids = [args.project]
+            else:  # 使用默认项目
+                project_ids = [get_default_project()]
 
-    # Generate wordcloud after crawling is complete
-    # Only for JSON save mode
-    await _generate_wordcloud_if_needed()
+            # 验证项目配置
+            for project_id in project_ids:
+                is_valid, error_msg = validate_project_config(project_id)
+                if not is_valid:
+                    print(f"[错误] {error_msg}")
+                    return
+
+    # 执行爬虫
+    if project_ids:
+        # 多项目模式
+        from tools.feishu import xhs_feishu_sink
+        from tools.project_loader import get_project_name
+
+        all_summaries = []
+
+        for idx, project_id in enumerate(project_ids, 1):
+            print(f"\n{'='*60}")
+            print(f"[项目 {idx}/{len(project_ids)}] 开始执行：{get_project_name(project_id)} ({project_id})")
+            print(f"{'='*60}\n")
+
+            start_time = time.time()
+            error_message = None
+            project_name = get_project_name(project_id)
+            crawler = None
+
+            try:
+                # 加载项目配置
+                apply_project_config(project_id)
+
+                # 重置飞书写入状态（避免项目间数据混淆）
+                xhs_feishu_sink.reset_for_tests()
+
+                # 执行爬虫
+                crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
+                await crawler.start()
+
+                _flush_excel_if_needed()
+                await _generate_wordcloud_if_needed()
+
+            except Exception as e:
+                error_message = str(e)
+                utils.logger.exception(f"[Main] 项目 {project_id} 执行失败: {e}")
+
+            elapsed_seconds = time.time() - start_time
+
+            # 收集统计数据
+            feishu_stats = xhs_feishu_sink.get_stats()
+            creator_stats = {}
+            if crawler and hasattr(crawler, 'get_creator_stats'):
+                creator_stats = crawler.get_creator_stats()
+
+            # 判断状态
+            if error_message:
+                status = "failed"
+            elif creator_stats.get("failed", 0) > 0:
+                status = "partial"
+            else:
+                status = "success"
+
+            # 构建摘要
+            summary = {
+                "project_id": project_id,
+                "project_name": project_name,
+                "status": status,
+                "creators": creator_stats,
+                "notes": feishu_stats,
+                "elapsed_seconds": round(elapsed_seconds, 1),
+                "error_message": error_message,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+            }
+
+            all_summaries.append(summary)
+
+            # 保存单个项目的摘要
+            project_summary_path = Path(config.SAVE_DATA_PATH) / "ci_run_summary.json"
+            project_summary_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(project_summary_path, "w", encoding="utf-8") as f:
+                json.dump(summary, f, ensure_ascii=False, indent=2)
+
+            print(f"\n{'='*60}")
+            print(f"[项目 {idx}/{len(project_ids)}] 完成：{project_name}")
+            print(f"{'='*60}\n")
+
+        # 保存所有项目的汇总
+        overall_summary_path = Path("data") / "ci_all_projects_summary.json"
+        overall_summary_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(overall_summary_path, "w", encoding="utf-8") as f:
+            json.dump(all_summaries, f, ensure_ascii=False, indent=2)
+
+        print(f"\n[总结] 所有项目执行完成，共 {len(project_ids)} 个项目")
+    else:
+        # 单次执行模式（非项目模式或指定了 creator_id）
+        crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
+        await crawler.start()
+
+        _flush_excel_if_needed()
+        await _generate_wordcloud_if_needed()
 
 
 async def async_cleanup() -> None:
