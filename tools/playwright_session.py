@@ -64,7 +64,13 @@ async def attach_chromium_browser(
 
 
 async def finalize_standard_playwright(
-    browser_context: BrowserContext,
+    use_cdp: bool = False,
+    save_login_state: bool = False,
+    persist_ok: bool = False,
+    browser_context: Optional[BrowserContext] = None,
+    playwright_browser: Optional[Browser] = None,
+    platform: str = "",
+    log = None,
     state_path: Optional[Path] = None,
     close_browser: bool = True,
 ) -> None:
@@ -72,22 +78,41 @@ async def finalize_standard_playwright(
     Finalize Playwright session and optionally save state
 
     Args:
+        use_cdp: Whether CDP mode is being used
+        save_login_state: Whether to save login state
+        persist_ok: Whether persistence was successful
         browser_context: Browser context to finalize
-        state_path: Path to save storage state
+        playwright_browser: Browser instance
+        platform: Platform name
+        log: Logger instance
+        state_path: Path to save storage state (overrides platform-based path)
         close_browser: Whether to close the browser
     """
-    try:
-        if state_path and config.SAVE_LOGIN_STATE:
-            state_path.parent.mkdir(parents=True, exist_ok=True)
-            await browser_context.storage_state(path=str(state_path))
-            utils.logger.info(f"[playwright_session] Saved storage state to {state_path}")
-    except Exception as e:
-        utils.logger.warning(f"[playwright_session] Failed to save storage state: {e}")
+    if not browser_context:
+        return
 
-    if close_browser:
+    logger = log if log else utils.logger
+
+    try:
+        if save_login_state and persist_ok:
+            if not state_path:
+                state_path = session_path_for_platform(platform) if platform else None
+
+            if state_path:
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                await browser_context.storage_state(path=str(state_path))
+                logger.info(f"[playwright_session] Saved storage state to {state_path}")
+    except Exception as e:
+        logger.warning(f"[playwright_session] Failed to save storage state: {e}")
+
+    if close_browser and not use_cdp:
         try:
-            await browser_context.close()
+            if browser_context:
+                await browser_context.close()
+            if playwright_browser:
+                await playwright_browser.close()
         except Exception as e:
             error_msg = str(e).lower()
             if "closed" not in error_msg and "disconnected" not in error_msg:
-                utils.logger.warning(f"[playwright_session] Error closing browser context: {e}")
+                logger.warning(f"[playwright_session] Error closing browser: {e}")
+
