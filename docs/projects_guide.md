@@ -14,8 +14,13 @@ Media_Crawler/
 │   │   ├── README.md                # 项目说明
 │   │   ├── data/xhs/                # 采集数据
 │   │   └── scripts/run.sh           # 启动脚本
-│   └── modern_taichi/               # 现代太极项目
-│       ├── project_config.py        # 项目配置
+│   ├── modern_taichi/               # 现代太极项目
+│   │   ├── project_config.py
+│   │   ├── README.md
+│   │   ├── data/xhs/
+│   │   └── scripts/run.sh
+│   └── xiaoyao_taichi/              # 逍遥太极（北京逍遥少儿太极独立台账）
+│       ├── project_config.py
 │       ├── README.md
 │       ├── data/xhs/
 │       └── scripts/run.sh
@@ -40,19 +45,22 @@ python main.py --platform xhs --type creator --project kids_taichi
 ### 2. 多项目顺序采集
 
 ```bash
-python main.py --platform xhs --type creator --projects kids_taichi,modern_taichi
+python main.py --platform xhs --type creator --projects kids_taichi,modern_taichi,xiaoyao_taichi
 ```
 
 执行顺序：
 1. 加载 kids_taichi 配置 → 采集 → 写入飞书
 2. 加载 modern_taichi 配置 → 采集 → 写入飞书
+3. 加载 xiaoyao_taichi 配置 → 采集 → 写入飞书
+
+完整项目说明见 [小红书采集项目总览](./xhs_projects_overview.md)。
 
 ### 3. 定时任务
 
 **每天凌晨 2 点采集所有项目**：
 ```bash
 # crontab -e
-0 2 * * * cd /path/to/Media_Crawler && python main.py --platform xhs --type creator --projects kids_taichi,modern_taichi >> logs/cron.log 2>&1
+0 2 * * * cd /path/to/Media_Crawler && python main.py --platform xhs --type creator --projects kids_taichi,modern_taichi,xiaoyao_taichi >> logs/cron.log 2>&1
 ```
 
 ## 新增项目
@@ -94,10 +102,17 @@ FEISHU = {
         "note_id": "笔记ID",      # 根据实际表格列名调整
         "title": "笔记标题",
         "link": "笔记链接",
-        "publish": "是否发布",
+        "publish": "是否发布",    # 与 publish_fields_on_create 二选一
     },
     
     "publish_value_on_create": "否",
+    # 分平台发布列（逍遥太极等表）：与 fields.publish 二选一
+    # "publish_fields_on_create": {
+    #     "快手是否发布": "否",
+    #     "视频号是否发布": "否",
+    #     "百家号是否发布": "否",
+    #     "抖音是否发布": "否",
+    # },
     "link_field_format": "object",
 }
 
@@ -115,6 +130,7 @@ RULES = {
 AVAILABLE_PROJECTS = [
     "kids_taichi",
     "modern_taichi",
+    "xiaoyao_taichi",
     "new_project",  # 新增
 ]
 ```

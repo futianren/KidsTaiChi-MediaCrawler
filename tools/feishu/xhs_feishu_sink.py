@@ -37,6 +37,7 @@ def _lark_settings() -> dict:
         "field_link": config.FEISHU_FIELD_LINK,
         "field_publish": config.FEISHU_FIELD_PUBLISH,
         "publish_value": config.FEISHU_PUBLISH_VALUE_ON_CREATE,
+        "publish_fields_on_create": getattr(config, "FEISHU_PUBLISH_FIELDS_ON_CREATE", None) or {},
         "link_field_format": config.FEISHU_LINK_FIELD_FORMAT,
         "xhs_international": bool(getattr(config, "XHS_INTERNATIONAL", False)),
         "timeout_sec": config.FEISHU_HTTP_TIMEOUT_SEC,

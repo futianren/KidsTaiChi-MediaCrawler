@@ -44,6 +44,12 @@ class LarkBitableClient:
         self.field_link = str(settings.get("field_link", "笔记链接")).strip() or "笔记链接"
         self.field_publish = str(settings.get("field_publish", "是否发布")).strip() or "是否发布"
         self.publish_value = str(settings.get("publish_value", "否")).strip() or "否"
+        raw_multi = settings.get("publish_fields_on_create") or {}
+        self.publish_fields_on_create = {
+            str(k).strip(): str(v).strip()
+            for k, v in raw_multi.items()
+            if str(k).strip()
+        }
         self.link_field_format = str(settings.get("link_field_format", "object")).strip().lower()
         self.xhs_international = bool(settings.get("xhs_international", False))
         self.timeout_sec = int(settings.get("timeout_sec", 30))
@@ -208,8 +214,11 @@ class LarkBitableClient:
                     self.field_note_id: str(note_id).strip(),
                     self.field_title: title or "",
                     self.field_link: self._link_value(link),
-                    self.field_publish: self.publish_value,
                 }
+                if self.publish_fields_on_create:
+                    fields.update(self.publish_fields_on_create)
+                else:
+                    fields[self.field_publish] = self.publish_value
                 records.append({"fields": fields})
             body = {"records": records}
             data = self._request_json("POST", url, headers=self._auth_headers(), json_body=body)

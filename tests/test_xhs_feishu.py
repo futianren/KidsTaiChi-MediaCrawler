@@ -119,3 +119,45 @@ async def test_feishu_sink_skips_when_existing(monkeypatch):
         await xhs_feishu_sink.flush()
 
     mock_inst.batch_create_xhs_notes.assert_not_called()
+
+
+def test_lark_batch_create_uses_multi_publish_fields():
+    from tools.feishu.lark_bitable_client import LarkBitableClient
+
+    client = LarkBitableClient(
+        {
+            "app_id": "app",
+            "app_secret": "sec",
+            "app_token": "tok",
+            "table_id": "tbl",
+            "field_note_id": "笔记ID",
+            "field_title": "笔记标题",
+            "field_link": "笔记链接",
+            "publish_fields_on_create": {
+                "快手是否发布": "否",
+                "抖音是否发布": "否",
+            },
+            "link_field_format": "plain",
+        }
+    )
+
+    mock_request = MagicMock(return_value={"code": 0, "data": {"records": [{}]}})
+    with (
+        patch.object(client, "_auth_headers", return_value={"Authorization": "Bearer t"}),
+        patch.object(client, "_request_json", mock_request),
+    ):
+        ok, fail = client.batch_create_xhs_notes([("n1", "标题", "https://www.xiaohongshu.com/explore/n1")])
+
+    assert ok == 1 and fail == 0
+    body = mock_request.call_args.kwargs["json_body"]
+    fields = body["records"][0]["fields"]
+    assert fields["快手是否发布"] == "否"
+    assert fields["抖音是否发布"] == "否"
+    assert "是否发布" not in fields
+
+
+def test_validate_xiaoyao_project_config():
+    from tools.project_loader import validate_project_config
+
+    ok, err = validate_project_config("xiaoyao_taichi")
+    assert ok, err

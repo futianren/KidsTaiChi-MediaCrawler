@@ -143,6 +143,7 @@ git push origin main
    - `data/ci_all_projects_summary.json` - 所有项目汇总
    - `projects/kids_taichi/data/` - 少儿太极数据
    - `projects/modern_taichi/data/` - 现代太极数据
+   - `projects/xiaoyao_taichi/data/` - 逍遥太极数据
 
 ## 🔍 故障排查
 
@@ -241,7 +242,7 @@ Cron 表达式说明：
 3. 检查本地是否能正常运行：
    ```bash
    python main.py --platform xhs --type creator --lt cookie \
-     --projects kids_taichi,modern_taichi \
+     --projects kids_taichi,modern_taichi,xiaoyao_taichi \
      --xhs_crawl_preset feishu_minimal \
      --headless true --get_comment false \
      --save_data_option jsonl

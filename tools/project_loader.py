@@ -128,6 +128,7 @@ def apply_project_config(project_id: str) -> Dict[str, Any]:
     config.FEISHU_FIELD_LINK = fields.get("link", "笔记链接")
     config.FEISHU_FIELD_PUBLISH = fields.get("publish", "是否发布")
     config.FEISHU_PUBLISH_VALUE_ON_CREATE = feishu.get("publish_value_on_create", "否")
+    config.FEISHU_PUBLISH_FIELDS_ON_CREATE = feishu.get("publish_fields_on_create", {}) or {}
     config.FEISHU_LINK_FIELD_FORMAT = feishu.get("link_field_format", "object")
 
     utils.logger.info(
@@ -217,10 +218,15 @@ def validate_project_config(project_id: str) -> tuple[bool, Optional[str]]:
 
     # 检查字段映射
     fields = feishu.get("fields", {})
-    required_fields = ["note_id", "title", "link", "publish"]
+    required_fields = ["note_id", "title", "link"]
     for field in required_fields:
         if not fields.get(field):
             return False, f"项目 '{project_id}' 缺少飞书字段映射：{field}"
+
+    if not fields.get("publish") and not feishu.get("publish_fields_on_create"):
+        return False, (
+            f"项目 '{project_id}' 需配置 fields.publish 或 publish_fields_on_create"
+        )
 
     return True, None
 

@@ -7,7 +7,7 @@
 ## 🎯 功能特性
 
 - ✅ 每天北京时间上午 2:00 自动执行
-- ✅ 顺序执行两个项目（kids_taichi、modern_taichi）
+- ✅ 顺序执行三个项目（kids_taichi、modern_taichi、xiaoyao_taichi）
 - ✅ 采集创作者笔记并写入飞书多维表格
 - ✅ 每个项目发送独立的飞书通知
 - ✅ 失败时也发送通知并说明原因
@@ -219,6 +219,7 @@ schedule:
 - `data/ci_all_projects_summary.json` - 所有项目汇总
 - `projects/kids_taichi/data/ci_run_summary.json` - 少儿太极摘要
 - `projects/modern_taichi/data/ci_run_summary.json` - 现代太极摘要
+- `projects/xiaoyao_taichi/data/ci_run_summary.json` - 逍遥太极摘要
 - `projects/*/data/*.jsonl` - 采集的笔记数据
 
 ## 🔄 后续优化建议

@@ -66,6 +66,8 @@ FEISHU_FIELD_TITLE = _env("FEISHU_FIELD_TITLE", "笔记标题") or "笔记标题
 FEISHU_FIELD_LINK = _env("FEISHU_FIELD_LINK", "笔记链接") or "笔记链接"
 FEISHU_FIELD_PUBLISH = _env("FEISHU_FIELD_PUBLISH", "是否发布") or "是否发布"
 FEISHU_PUBLISH_VALUE_ON_CREATE = _env("FEISHU_PUBLISH_VALUE_ON_CREATE", "否") or "否"
+# 多平台「是否发布」列（项目级 publish_fields_on_create 覆盖；默认空）
+FEISHU_PUBLISH_FIELDS_ON_CREATE: dict[str, str] = {}
 
 # 链接列：plain 纯文本 | object 飞书 URL 字段常用 {"link","text"}
 FEISHU_LINK_FIELD_FORMAT = (_env("FEISHU_LINK_FIELD_FORMAT", "object") or "object").lower()

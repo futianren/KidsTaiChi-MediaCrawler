@@ -78,7 +78,7 @@ jobs:
           test -s cookiesFile/xhs/session.json
           echo "✅ session.json restored from secret (decompressed)"
 
-      - name: Run XHS creator (kids_taichi + modern_taichi)
+      - name: Run XHS creator (kids_taichi + modern_taichi + xiaoyao_taichi)
         id: crawl
         run: |
           set -euo pipefail
@@ -86,7 +86,7 @@ jobs:
             --platform xhs \
             --type creator \
             --lt cookie \
-            --projects kids_taichi,modern_taichi \
+            --projects kids_taichi,modern_taichi,xiaoyao_taichi \
             --xhs_crawl_preset feishu_minimal \
             --headless true \
             --get_comment false \
@@ -106,3 +106,4 @@ jobs:
             data/ci_all_projects_summary.json
             projects/kids_taichi/data/**/*
             projects/modern_taichi/data/**/*
+            projects/xiaoyao_taichi/data/**/*
