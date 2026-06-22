@@ -9,8 +9,9 @@
 | `kids_taichi` | 少儿太极 | 13 | [少儿太极表](https://ccnxtccvgg22.feishu.cn/base/QZ4xb28cKa7UJqsKBD1c9FKXnsc?table=tblj5w5GWd4jZG9c) | 单列 `是否发布` |
 | `modern_taichi` | 现代太极 | 10 | [现代太极表](https://ccnxtccvgg22.feishu.cn/base/CVp9bX541aOGrcsAAfecp1NDnhc?table=tblaS713yNB70l9m) | 单列 `是否发布` |
 | `xiaoyao_taichi` | 逍遥太极 | 1 | [逍遥太极表](https://ccnxtccvgg22.feishu.cn/base/VvrYbHM2YaUJousmxeZcGgnZn9c?table=tblXLmvUy2RidkhC) | 分平台四列（见下） |
+| `beida_qingniao` | 北大青鸟培训 | 5 | [北大青鸟培训表](https://ccnxtccvgg22.feishu.cn/base/W3WPbvjOLaF0zssAn87cfiignsm?table=tblQ5Rf1d3mR0nje) | 单列 `是否发布` |
 
-**合计**：24 个创作者 URL（含 1 个与少儿太极重复的账号）。
+**合计**：29 个创作者 URL（含 1 个与少儿太极重复的账号）。
 
 ## 逍遥太极（xiaoyao_taichi）
 
@@ -44,7 +45,7 @@
 
 | 工作流 | 文件 | 说明 |
 |--------|------|------|
-| 每日采集 + 飞书 | `.github/workflows/xhs-daily-kids-modern-feishu.yml` | 北京时间 02:00；顺序执行三个项目 |
+| 每日采集 + 飞书 | `.github/workflows/xhs-daily-kids-modern-feishu.yml` | 北京时间 02:00；顺序执行 `AVAILABLE_PROJECTS` 全部项目 |
 | 单账号手动 | `.github/workflows/xhs-profile-crawl.yml` | 手动输入创作者 URL |
 | 文档部署 | `.github/workflows/deploy.yml` | VitePress → GitHub Pages |
 
@@ -52,7 +53,7 @@
 
 ```bash
 python main.py --platform xhs --type creator --lt cookie \
-  --projects kids_taichi,modern_taichi,xiaoyao_taichi \
+  --projects "$(python -c "from config.projects_config import AVAILABLE_PROJECTS; print(','.join(AVAILABLE_PROJECTS))")" \
   --xhs_crawl_preset feishu_minimal --headless true \
   --get_comment false --save_data_option jsonl
 ```
@@ -72,6 +73,7 @@ python main.py --platform xhs --type creator --lt cookie \
 bash projects/kids_taichi/scripts/run.sh
 bash projects/modern_taichi/scripts/run.sh
 bash projects/xiaoyao_taichi/scripts/run.sh
+bash projects/beida_qingniao/scripts/run.sh
 ```
 
 ## 相关文档

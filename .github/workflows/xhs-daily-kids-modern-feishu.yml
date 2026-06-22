@@ -78,15 +78,17 @@ jobs:
           test -s cookiesFile/xhs/session.json
           echo "✅ session.json restored from secret (decompressed)"
 
-      - name: Run XHS creator (kids_taichi + modern_taichi + xiaoyao_taichi)
+      - name: Run XHS creator (all projects)
         id: crawl
         run: |
           set -euo pipefail
+          PROJECTS=$(uv run python -c "from config.projects_config import AVAILABLE_PROJECTS; print(','.join(AVAILABLE_PROJECTS))")
+          echo "Projects to crawl: $PROJECTS"
           uv run python main.py \
             --platform xhs \
             --type creator \
             --lt cookie \
-            --projects kids_taichi,modern_taichi,xiaoyao_taichi \
+            --projects "$PROJECTS" \
             --xhs_crawl_preset feishu_minimal \
             --headless true \
             --get_comment false \
@@ -104,6 +106,4 @@ jobs:
           if-no-files-found: ignore
           path: |
             data/ci_all_projects_summary.json
-            projects/kids_taichi/data/**/*
-            projects/modern_taichi/data/**/*
-            projects/xiaoyao_taichi/data/**/*
+            projects/*/data/**/*
