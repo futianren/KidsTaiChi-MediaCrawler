@@ -22,11 +22,11 @@ CREATORS = [
 ]
 
 # 飞书表格配置
-# 表格链接：https://ccnxtccvgg22.feishu.cn/base/W3WPbvjOLaF0zssAn87cfiignsm?table=tblQ5Rf1d3mR0nje&view=vewyl1qJey
+# 表格链接：https://ccnxtccvgg22.feishu.cn/base/W3WPbvjOLaF0zssAn87cfiignsm?table=tblQ5Rf1d3mR0nje&view=vewl0XfIvD
 FEISHU = {
     "app_token": "W3WPbvjOLaF0zssAn87cfiignsm",
     "table_id": "tblQ5Rf1d3mR0nje",
-    "view_id": "vewyl1qJey",
+    "view_id": "vewl0XfIvD",
 
     "fields": {
         "note_id": "笔记ID",
@@ -35,12 +35,17 @@ FEISHU = {
         "publish": "是否发布",
     },
 
-    "publish_value_on_create": "否",
+    # 新建行默认值（与表中「待发布记录」视图字段一致）
+    "publish_fields_on_create": {
+        "是否发布": "否",
+        "笔记平台": "小红书",
+    },
+
     "link_field_format": "plain",
 }
 
-# 采集规则（与 modern_taichi 一致）
+# 采集规则（图文 + 视频均采集；不拉评论）
 RULES = {
-    "creator_only_video_notes": True,
+    "creator_only_video_notes": False,
     "creator_fetch_comments": False,
 }

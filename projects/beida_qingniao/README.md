@@ -14,10 +14,10 @@
 
 ## 飞书表格
 
-- **表格链接**：https://ccnxtccvgg22.feishu.cn/base/W3WPbvjOLaF0zssAn87cfiignsm?table=tblQ5Rf1d3mR0nje&view=vewyl1qJey
+- **表格链接**：https://ccnxtccvgg22.feishu.cn/base/W3WPbvjOLaF0zssAn87cfiignsm?table=tblQ5Rf1d3mR0nje&view=vewl0XfIvD
 - **App Token**：W3WPbvjOLaF0zssAn87cfiignsm
 - **Table ID**：tblQ5Rf1d3mR0nje
-- **View ID**：vewyl1qJey
+- **View ID**：vewl0XfIvD（视图名：待发布记录）
 
 ### 字段说明
 
@@ -30,10 +30,10 @@
 
 ## 采集规则
 
-- **仅采集视频笔记**：跳过图文笔记
+- **图文 + 视频均采集**（项目内覆盖 `feishu_minimal` 预设的「仅视频」默认值）
 - **不采集评论**：不请求一级和二级评论
-- **每个账号主页最多 1 页**：约 30 条笔记
-- **使用 feishu_minimal 预设**：省流量模式
+- **每个账号主页最多 1 页**：约 30 条笔记（全局 `XHS_CREATOR_MAX_LIST_PAGES=1`）
+- **使用 feishu_minimal 预设**：省流量模式（关评论、不下载媒体、不拉创作者资料）
 
 ## 快速启动
 
